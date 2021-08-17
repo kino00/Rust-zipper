@@ -4,6 +4,9 @@ use std::env;
 
 use zipper::encode;
 
+/*
+ コマンドライン引数で入力を受け付けている。
+ */
 fn main() -> Result<(), std::io::Error> {
     let args: Vec<String> = env::args().collect();
 

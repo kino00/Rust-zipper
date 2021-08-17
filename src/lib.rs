@@ -2,13 +2,23 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::{Error};
 
+/*
+ デバッグ用に出力を制御するためのもの
+ */
 const PRINT_DEBAGU: bool = false;
 
-const MAX_BUFFER_SIZE: usize = 1024;
-const MAX_MATCH_LEN: usize = 258;
-const MIN_MATCH_LEN: usize = 3;
-const MAX_WINDOW_SIZE: usize = 1024;
+const MAX_BUFFER_SIZE: usize = 1024;  // 1回の入力で受けつける最大のバイト
+const MAX_MATCH_LEN: usize = 258;     // 最大でどれだけ一致するかのサイズ
+const MIN_MATCH_LEN: usize = 3;       // 少なくとも３は一致しないと圧縮処理が行われない
+const MAX_WINDOW_SIZE: usize = 1024;  // スライドウインドウの最大サイズ
 
+/*
+ bit単位で出力を行うためのもの
+ bit_count:     bufferに何ビット突っ込んだかを保持する
+ buffer:        出力用のbuffer
+ output_vector: 出力データをこのvectorに溜めて最後に一気に出力する
+ output:        出力ファイルデータ
+ */
 struct BitWriter<'a, T: Write> {
     bit_count: u8,
     buffer: u8,
@@ -26,6 +36,9 @@ impl<'a, T: Write> BitWriter<'a, T> {
         }
     }
 
+    /*
+     deflate圧縮では出力方向が変わるため、ハフマン符号化したものや、距離符号のためのもの
+     */
     pub fn code_bits(&mut self, bits: u16, bit_count: u8) -> Result<(), Error> {
         for i in 0..bit_count {
             if self.bit_count == 8 {
@@ -40,6 +53,9 @@ impl<'a, T: Write> BitWriter<'a, T> {
         Ok(())
     }
 
+    /*
+     上以外のもの（拡張ビットや、ブロックの種類）
+     */
     pub fn extra_bits(&mut self, bits: u16, bit_count: u8) -> Result<(), Error> {
         for i in 0..bit_count {
             if self.bit_count == 8 {
@@ -53,6 +69,9 @@ impl<'a, T: Write> BitWriter<'a, T> {
         Ok(())
     }
 
+    /*
+     最後にvecterに入っているものをまとめて出力する
+     */
     pub fn flush(&mut self) -> Result<(), Error> {
         if self.bit_count > 0 {
             self.buffer <<= 8 - self.bit_count;
@@ -75,6 +94,9 @@ impl<'a, T: Write> BitWriter<'a, T> {
         Ok(())
     }
 
+    /*
+     bufferが8ビット分溜まった時に実行される
+     */
     fn flush_to_output(&mut self) -> Result<(), Error> {
         let mut buffer = 0;
         for i in 0..8 {
@@ -95,12 +117,19 @@ impl<'a, T: Write> BitWriter<'a, T> {
     }
 }
 
+/*
+ 読み込みをbyteで保持するもの
+ buffer:          データをMAX_BUFFER_SIZE分取り込むための配列。
+ buf_count:       現在bufferが何個目まで読まれているかを保持する。
+ buf_size:        bufferの何番目までデータがあるかを保持する
+ flag:            読み込むデータがもうない時に使用する。
+ file_size:       入力ファイルのサイズを記録する。
+ input:           入力ファイルの情報を記録する。
+ */
 struct ByteReader<'a, T: Read> {
-    buffer: [u8; MAX_WINDOW_SIZE],
-    sub_buffer: u8,
+    buffer: [u8; MAX_BUFFER_SIZE],
     buf_count: usize,
     buf_size: usize,
-    sub_buffer_flag: bool,
     flag: bool,
     file_size: u32,
     input: &'a mut T,
@@ -109,7 +138,7 @@ struct ByteReader<'a, T: Read> {
 impl<'a, T: Read> ByteReader<'a, T> {
     pub fn new(input: &'a mut T) -> Self {
         let mut reader = ByteReader {
-            buffer: [0; MAX_WINDOW_SIZE],
+            buffer: [0; MAX_BUFFER_SIZE],
             sub_buffer: 0,
             buf_count: 0,
             buf_size: 0,
@@ -122,6 +151,9 @@ impl<'a, T: Read> ByteReader<'a, T> {
         reader
     }
 
+    /*
+     bufferが最後まで読まれたり、最初の読み込みの際に実行される。
+     */
     fn load_next_byte(&mut self) -> Result<(), std::io::Error>{
         match self.input.read(&mut self.buffer)? {
             0 => self.flag = false,
@@ -134,18 +166,19 @@ impl<'a, T: Read> ByteReader<'a, T> {
         Ok(())
     }
 
+    /*
+     buf_countの位置にあるバイトを返す。
+     */
     pub fn seek_byte(&mut self) -> u8{
         self.buffer[self.buf_count]
     }
 
+    /*
+     bit_countを進める。bufferの最後まできていた場合には
+     load_next_byteで読み込む。
+     */
     pub fn next_byte(&mut self) {
-        if self.buf_count == MAX_BUFFER_SIZE - 1 ||
-            self.buf_count == self.buf_size - 1{
-            self.sub_buffer = self.buffer[self.buf_count];
-            let _ = self.load_next_byte();
-            self.sub_buffer_flag = true;
-            self.buf_count = 0;
-        } else if self.buf_count < MAX_BUFFER_SIZE &&
+        if self.buf_count < MAX_BUFFER_SIZE &&
             self.buf_count < self.buf_size {
             self.buf_count += 1;
         } else {
@@ -154,11 +187,12 @@ impl<'a, T: Read> ByteReader<'a, T> {
         }
     }
 
+    /*
+     bit_countの位置にあるバイトを返して、bit_countを進める。
+     bufferの最後まできていた場合にはload_next_byteで読み込む。
+     */
     pub fn get_byte(&mut self) -> u8 {
-        if self.sub_buffer_flag == true {
-            self.sub_buffer_flag = false;
-            self.sub_buffer
-        } else if self.buf_count < MAX_BUFFER_SIZE &&
+        if self.buf_count < MAX_BUFFER_SIZE &&
             self.buf_count < self.buf_size {
             let buffer = self.buffer[self.buf_count];
             self.buf_count += 1;
@@ -172,6 +206,14 @@ impl<'a, T: Read> ByteReader<'a, T> {
     }
 }
 
+/*
+ Crc32を計算するための構造体
+ divisor:      除算を行う際に使用するbit列を保持する
+ non_divisor:  除算される側のデータを保持する
+ buffer:       とりあえずのデータを保持する
+ buf_count:    bufferが何bit処理されたかを保持する
+ first_count:  最初の4バイトは反転する必要があるためカウントする
+ */
 struct Crc32 {
     divisor: u32,
     non_divisor: u32,
@@ -191,6 +233,9 @@ impl Crc32 {
         }
     }
 
+    /*
+     non_divisorやbufferにデータを保持させるもの
+     */
     pub fn push_buf(&mut self, buf: u8){
         let mut buffer: u8 = 0;
         for i in 0..8 {
@@ -199,7 +244,7 @@ impl Crc32 {
         }
         if self.first_count < 4 {
             self.non_divisor <<= 8;
-            self.non_divisor += !buffer as u32;
+            self.non_divisor |= !buffer as u32;
             self.first_count += 1;
         } else {
             self.buffer = buffer.clone();
@@ -208,6 +253,9 @@ impl Crc32 {
         }
     }
 
+    /*
+     先頭bitが立っている場合には除算を行い、それ以外の場合にはbufferのbitを先頭から突っ込む
+     */
     fn comp(&mut self){
         for i in 0..self.buf_count{
             if self.non_divisor >= 2147483648{
@@ -222,11 +270,17 @@ impl Crc32 {
         self.buf_count = 0
     } 
 
+    /*
+     除算を行う。実際にはxor
+     */
     fn comple(&mut self){
         let buffer = self.non_divisor ^ self.divisor;
         self.non_divisor = buffer;
     }
 
+    /*
+     現在のnon_divisoreからcrc32を計算してそれを返す
+     */
     fn get_crc32(&mut self) -> u32 {
         self.push_buf(0);
         self.push_buf(0);
@@ -244,6 +298,11 @@ impl Crc32 {
     }
 }
 
+/*
+ zipのローカルヘッダーやセントラルヘッダー、エンドセントラルヘッダなどを
+ 保持するための構造体
+ buffer: ヘッダー情報を保持する
+ */
 struct Header{
     buffer: Vec<u8>,
 }
@@ -255,6 +314,9 @@ impl Header {
         }
     }
 
+    /*
+     32bitの情報をbufferに追加する
+     */
     fn push32(&mut self, num: u32) {
         let a = num & 0b11111111;
         let b = (num >> 8) & (0b11111111);
@@ -266,6 +328,9 @@ impl Header {
         self.buffer.push(d as u8);
     }
 
+    /*
+    16bitの情報をbufferに追加する
+     */
     fn push16(&mut self, num: u16) {
         let a = num & 0b11111111;
         let b = (num >> 8) & (0b11111111);
@@ -273,6 +338,9 @@ impl Header {
         self.buffer.push(b as u8);
     }
 
+    /*
+     PK0506ヘッダであることを示す情報を追加する
+     */
     fn push_pk0506(&mut self){
         self.buffer.push(0x50);
         self.buffer.push(0x4b);
@@ -280,6 +348,9 @@ impl Header {
         self.buffer.push(0x06);
     }
 
+    /*
+     PK0304ヘッダであることを示す情報を追加する
+     */
     fn push_pk0304(&mut self){
         self.buffer.push(0x50);
         self.buffer.push(0x4b);
@@ -287,6 +358,9 @@ impl Header {
         self.buffer.push(0x04);
     }
 
+    /*
+     PK0102ヘッダであることを示す情報を追加する
+     */
     fn push_pk0102(&mut self){
         self.buffer.push(0x50);
         self.buffer.push(0x4b);
@@ -294,13 +368,20 @@ impl Header {
         self.buffer.push(0x02);
     }
 
+    /*
+     ファイルの名前の情報を追加する
+     */
     fn push_filename(&mut self, filename: &str) {
         let bytes: &[u8] = filename.as_bytes();
         for i in 0..bytes.len() {
             self.buffer.push(bytes[i]);
         }
     }
-    
+
+    /*
+     ローカルヘッダーに必要な情報をもらって、ローカルヘッダーを作成する
+     最終更新時間の情報が正しくできていないので最終更新時間を取得して書き換える
+     */
     pub fn local_header(crc32: u32, before_size: u32, after_size: u32, filename: &str) -> Self {
         let mut header = Header::new();
         header.push_pk0304();
@@ -317,7 +398,11 @@ impl Header {
         header.push_filename(&filename);
         header
     }
-    
+
+    /*
+     セントラルヘッダーに必要な情報をもらって、セントラルヘッダーを作成する
+     最終更新時間の情報が正しくできていないので最終更新時間を取得して書き換える
+     */
     pub fn central_header(crc32: u32, before_size: u32, after_size: u32, filename: &str) -> Self {
         let mut header = Header::new();
         header.push_pk0102();
@@ -340,7 +425,10 @@ impl Header {
         header.push_filename(&filename);
         header
     }
-    
+
+    /*
+     エンドセントラルヘッダーに必要な情報をもらって、エンドセントラルヘッダーを作成する
+     */
     pub fn end_header(header_size: u32, header_start: u32) -> Self {
         let mut header = Header::new();
         header.push_pk0506();
@@ -355,6 +443,10 @@ impl Header {
     }
 }
 
+/*
+ windowの中にcheakと同じ並びのものがあるかを調べる。
+ あった際には距離を返す。
+ */
 fn match_cheak<T: Eq>(window: &[T], cheak: &[T]) -> isize {
     if window.len() < cheak.len(){
         return -1;
@@ -373,6 +465,9 @@ fn match_cheak<T: Eq>(window: &[T], cheak: &[T]) -> isize {
     -1
 }
 
+/*
+ 固定ハフマンに変換する
+ */
 fn cheanger(num: usize) -> (u8, u16) {
     let (len, re) = match num {
         0   ..= 143 => (8, num + 0x30 ),
@@ -384,6 +479,9 @@ fn cheanger(num: usize) -> (u8, u16) {
     (len, re as u16)
 }
 
+/*
+ 長さから長さ符号と拡張ビットを調べる
+ */
 fn length_extra(date: u16) -> (u16, u8, u16){
     let (num, len, extra) = match date {
         3   ..=  10 => (date + 254, 0, 0),
@@ -412,6 +510,9 @@ fn length_extra(date: u16) -> (u16, u8, u16){
     (num as u16 ,len as u8 ,extra as u16)
 }
 
+/*
+ 距離から距離符号と拡張ビットを調べる
+ */
 fn distance_extra(date: u32) -> (u8, u8, u16){
     let (num, dis, extra) = match date {
         1     ..=     4 => (date - 1,0, 0),
@@ -446,6 +547,9 @@ fn distance_extra(date: u32) -> (u8, u8, u16){
     (num as u8 ,dis as u8, extra as u16)
 }
 
+/*
+ エンコード処理を行い、zip形式で出力を行う。
+ */
 pub fn encode(input_file: &str, output_file: &str) -> Result<(), std::io::Error> {
     let mut input = File::open(input_file)?;
     let mut output = File::create(output_file)?;
