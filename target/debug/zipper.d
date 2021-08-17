@@ -1,0 +1,1 @@
+/Users/k.n.kino/program/pro_kenkyu/rust-kenkyu/zipper/target/debug/zipper: /Users/k.n.kino/program/pro_kenkyu/rust-kenkyu/zipper/src/lib.rs /Users/k.n.kino/program/pro_kenkyu/rust-kenkyu/zipper/src/main.rs
