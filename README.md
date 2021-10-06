@@ -7,8 +7,21 @@
 （フォルダを指定して圧縮を行えない。）
 
 不具合
-現在は、ファイルのサイズが大きかったり、ファイルの中に日本語（おそらくUTF-8）が含まれていると展開することができなかったり、展開してもファイルの中身が空白になってしまうといったものがある。
+今回はテキストファイルを対象としているため、他のpngやpdfなどを圧縮して解凍した際に展開することができない。
+文字列の中にアスキーコード以外の文字が含まれていると（日本語など）展開することができなかったり、展開できても
+中身が空っぽのファイルになってしまったりといったものがある
 
-また、展開後のファイルの最終更新日時が1979年11月30日 0:00分になってしまっているが、これは原因がわかっているため修正を行いたいと考えている。
 
+参考にしたサイト
 
+crc32の実装
+https://www.slideshare.net/7shi/crc32
+
+固定ハフマン
+https://darkcrowcorvus.hatenablog.jp/?page=1483525541
+https://wiki.suikawiki.org/n/DEFLATE#anchor-106
+https://www.slideshare.net/7shi/deflate
+
+zipのフォーマット
+https://hgotoh.jp/wiki/doku.php/documents/other/other-017
+http://menyukko.ifdef.jp/cauldron/dtzipformat.html
